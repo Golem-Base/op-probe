@@ -4,6 +4,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     devshell.url = "github:numtide/devshell";
     foundry.url = "github:shazow/foundry.nix/monthly";
+    solc = {
+      url = "github:hellwolf/solc.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     systems.url = "github:nix-systems/default";
   };
 
@@ -20,19 +24,29 @@
       }: {
         _module.args.pkgs = import inputs.nixpkgs {
           inherit system;
-          overlays = [inputs.foundry.overlay];
+          overlays = [
+            inputs.foundry.overlay
+            inputs.solc.overlay
+          ];
         };
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            # nix
             alejandra
-            foundry
+
+            # golang
             go
             go-tools
             gopls
             gotools
             delve
             gdlv
+
+            # solidity
+            foundry
+            go-ethereum
+            solc
           ];
         };
 

@@ -82,7 +82,7 @@ var DepositCommand = &cli.Command{
 		l2RpcUrl := c.String("l2-rpc-url")
 		l2Client, _, err := internal.ConnectClient(ctx, l2RpcUrl)
 		if err != nil {
-			return fmt.Errorf("could not connect to client at %s: %w", l1RpcUrl, err)
+			return fmt.Errorf("could not connect to client at %s: %w", l2RpcUrl, err)
 		}
 
 		sender := crypto.PubkeyToAddress(privateKey.PublicKey)
