@@ -1,4 +1,4 @@
-module github.com/Golem-Base/op-devnet/probe
+module github.com/Golem-Base/op-probe
 
 go 1.23.5
 

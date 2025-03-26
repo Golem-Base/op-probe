@@ -6,7 +6,8 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/Golem-Base/op-devnet/probe/bridge"
+	"github.com/Golem-Base/op-probe/internal"
+
 	e2eBindings "github.com/ethereum-optimism/optimism/op-e2e/bindings"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/transactions"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
@@ -94,12 +95,12 @@ var list = &cli.Command{
 			return fmt.Errorf("could not dial l2 rpc at %s: %w", l2RpcUrl, err)
 		}
 
-		account, err := bridge.SafeParseAddress(c.String("account"))
+		account, err := internal.SafeParseAddress(c.String("account"))
 		if err != nil {
 			return fmt.Errorf("could not parse account: %w", err)
 		}
 
-		disputeGameFactoryAddress, err := bridge.SafeParseAddress(c.String("dispute-game-factory-address"))
+		disputeGameFactoryAddress, err := internal.SafeParseAddress(c.String("dispute-game-factory-address"))
 		if err != nil {
 			return fmt.Errorf("could not parse DisputeGameFactory address: %w", err)
 		}
@@ -108,7 +109,7 @@ var list = &cli.Command{
 			return fmt.Errorf("could not instantiate DisputeGameFactory contract: %w", err)
 		}
 
-		optimismPortal2Address, err := bridge.SafeParseAddress(c.String("optimism-portal2-address"))
+		optimismPortal2Address, err := internal.SafeParseAddress(c.String("optimism-portal2-address"))
 		if err != nil {
 			return fmt.Errorf("could not parse DisputeGameFactory address: %w", err)
 		}
@@ -234,7 +235,7 @@ var initialize = &cli.Command{
 			return fmt.Errorf("could not dial l2 rpc at %s: %w", l2RpcUrl, err)
 		}
 
-		value, err := bridge.ParseUint256BigInt(c.String("value"))
+		value, err := internal.ParseUint256BigInt(c.String("value"))
 		if err != nil {
 			return err
 		}
@@ -321,7 +322,7 @@ var initialize = &cli.Command{
 // 	},
 // }
 
-var Withdraw = &cli.Command{
+var WithdrawCommand = &cli.Command{
 	Name:  "withdraw",
 	Usage: "Performs optimism withdrawal operations",
 	Subcommands: []*cli.Command{

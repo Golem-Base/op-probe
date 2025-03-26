@@ -7,38 +7,37 @@
     systems.url = "github:nix-systems/default";
   };
 
-  outputs =
-    inputs@{ flake-parts, ... }:
-    flake-parts.lib.mkFlake { inherit inputs; } {
-
-      imports = [ inputs.devshell.flakeModule ];
+  outputs = inputs @ {flake-parts, ...}:
+    flake-parts.lib.mkFlake {inherit inputs;} {
+      imports = [inputs.devshell.flakeModule];
 
       systems = import inputs.systems;
-      perSystem =
-        {
-          system,
-          pkgs,
-          self',
-          ...
-        }:
-        {
-          _module.args.pkgs = import inputs.nixpkgs {
-            inherit system;
-            overlays = [ inputs.foundry.overlay ];
-          };
-
-          devShells.default = pkgs.mkShell {
-            packages = with pkgs; [
-              go
-              go-tools
-              gopls
-              gotools
-            ];
-          };
-
-          packages.op-probe = pkgs.callPackage ./. { };
-          packages.default = self'.packages.op-probe;
+      perSystem = {
+        system,
+        pkgs,
+        self',
+        ...
+      }: {
+        _module.args.pkgs = import inputs.nixpkgs {
+          inherit system;
+          overlays = [inputs.foundry.overlay];
         };
 
+        devShells.default = pkgs.mkShell {
+          packages = with pkgs; [
+            alejandra
+            foundry
+            go
+            go-tools
+            gopls
+            gotools
+            delve
+            gdlv
+          ];
+        };
+
+        packages.op-probe = pkgs.callPackage ./. {};
+        packages.default = self'.packages.op-probe;
+      };
     };
 }

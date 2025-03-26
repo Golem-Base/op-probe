@@ -3,21 +3,18 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/Golem-Base/op-devnet/probe/bridge"
+	"github.com/Golem-Base/op-probe/internal"
 
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/transactions"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/urfave/cli/v2"
 )
 
-var SendOnReadyCommand = &cli.Command{
-	Name:  "sendOnReady",
+var SendCommand = &cli.Command{
+	Name:  "send",
 	Usage: "Waits for the client to produce blocks and attempts to transfer ETH",
 
 	// Example flags
@@ -33,43 +30,52 @@ var SendOnReadyCommand = &cli.Command{
 			Required: true,
 		},
 		&cli.StringFlag{
-			Name:     "value",
-			Usage:    "amount to send",
+			Name:     "amount",
+			Usage:    "Amount to send in wei",
+			Required: true,
+		},
+		&cli.StringFlag{
+			Name:     "recipient",
+			Usage:    "Address to receive amount",
 			Required: true,
 		},
 	},
 	Action: func(c *cli.Context) error {
-		value, err := bridge.ParseUint256BigInt(c.String("value"))
+		ctx := context.Background()
+
+		amount, err := internal.ParseUint256BigInt(c.String("amount"))
 		if err != nil {
 			return err
 		}
 
-		ctx := context.Background()
-
-		client, err := ethclient.Dial(c.String("rpc-url"))
-		if err != nil {
-			return fmt.Errorf("could not dial rpc at %s: %w", c.String("rpc-url"), err)
-		}
 		privateKey, err := crypto.HexToECDSA(c.String("private-key"))
 		if err != nil {
 			return fmt.Errorf("failed to parse private-key: %w", err)
 		}
 
-		timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		if err := bridge.WaitForChainsStart(timeoutCtx, []*ethclient.Client{client}); err != nil {
-			return fmt.Errorf("Chain did not start: %w", err)
+		sender := crypto.PubkeyToAddress(privateKey.PublicKey)
+
+		rpcUrl := c.String("rpc-url")
+		client, _, err := internal.ConnectClient(ctx, rpcUrl)
+		if err != nil {
+			return fmt.Errorf("could not connect to client at %s: %w", rpcUrl, err)
 		}
 
-		zeroAddress := common.HexToAddress(bridge.ZeroAddress) // Get value
+		recipient, err := internal.SafeParseAddress(c.String("recipient"))
+		if err != nil {
+			return fmt.Errorf("could not parse recipient address: %w", err)
+		}
+
+		log.Info("sending transaction", "amount", amount, "sender", sender, "recipient", recipient)
+
 		candidate := txmgr.TxCandidate{
-			To:       &zeroAddress,
+			To:       &internal.ZeroAddress,
 			GasLimit: 21000,
-			Value:    value,
+			Value:    amount,
 		}
 		_, receipt, err := transactions.SendTx(ctx, client, candidate, privateKey)
 
-		log.Info("Successfully sent transaction", "tx", receipt.TxHash.Hex())
+		log.Info("successfully sent transaction", "tx", receipt.TxHash.Hex())
 
 		return nil
 	},

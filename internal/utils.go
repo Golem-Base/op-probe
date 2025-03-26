@@ -1,4 +1,4 @@
-package bridge
+package internal
 
 import (
 	"context"
@@ -13,9 +13,11 @@ import (
 	"github.com/holiman/uint256"
 )
 
-var ZeroAddress string = "0x0000000000000000000000000000000000000000"
+const ZeroAddressString string = "0x0000000000000000000000000000000000000000"
 
-const DEFAULT_RECEIVE_DEFAULT_GAS_LIMIT uint32 = 200_000
+var ZeroAddress common.Address = common.HexToAddress(ZeroAddressString)
+
+const RECEIVE_DEFAULT_GAS_LIMIT uint32 = 200_000
 
 func ParseUint256BigInt(value string) (*big.Int, error) {
 	uint, err := uint256.FromDecimal(value)
@@ -25,23 +27,18 @@ func ParseUint256BigInt(value string) (*big.Int, error) {
 	return uint.ToBig(), nil
 }
 
-func SafeParseAddress(address string) (common.Address, error) {
-	address = strings.ToLower(strings.TrimSpace(address))
-
-	// Check if it's a valid Ethereum address
-	if !common.IsHexAddress(address) {
-		return common.Address{}, fmt.Errorf("invalid Ethereum address: %s", address)
+func SafeParseAddress(addressHex string) (common.Address, error) {
+	addressHex = strings.ToLower(strings.TrimSpace(addressHex))
+	if !common.IsHexAddress(addressHex) {
+		return common.Address{}, fmt.Errorf("invalid Ethereum address: %s", addressHex)
 	}
 
-	// Convert to common.Address type
-	parsedAddress := common.HexToAddress(address)
-
-	// Check if it's the zero address
-	if parsedAddress == common.HexToAddress("0x0000000000000000000000000000000000000000") {
+	address := common.HexToAddress(addressHex)
+	if address == common.HexToAddress("0x0000000000000000000000000000000000000000") {
 		return common.Address{}, fmt.Errorf("zero address is not allowed")
 	}
 
-	return parsedAddress, nil
+	return address, nil
 }
 
 func WaitForChainsStart(ctx context.Context, clients []*ethclient.Client) error {
@@ -79,4 +76,28 @@ func WaitForChainsStart(ctx context.Context, clients []*ethclient.Client) error 
 			}
 		}
 	}
+}
+
+func ConnectClient(ctx context.Context, rpcUrl string) (*ethclient.Client, *big.Int, error) {
+	client, err := ethclient.Dial(rpcUrl)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not dial rpc url at %s: %w", rpcUrl, err)
+	}
+
+	log.Info("Successfully dialed client", "url", rpcUrl)
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := WaitForChainsStart(timeoutCtx, []*ethclient.Client{client}); err != nil {
+		return nil, nil, fmt.Errorf("client has not started: %w", err)
+	}
+
+	chainId, err := client.ChainID(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not fetch l1 network id: %w", err)
+	}
+
+	log.Info("Successfully connected to chain", "chainId", chainId)
+
+	return client, chainId, nil
 }
