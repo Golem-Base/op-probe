@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ethereum-optimism/optimism/op-e2e/bindings"
@@ -24,11 +25,14 @@ type DepositContracts struct {
 	L2StandardBridge        *bindings.L2StandardBridge
 }
 
-func NewDepositContracts(l1Client, l2Client *ethclient.Client, optimismPortalAddressHex, l1StandardBridgeAddressHex string) (*DepositContracts, error) {
+func NewDepositContracts(ctx context.Context, l1Client, l2Client *ethclient.Client, optimismPortalAddressHex, l1StandardBridgeAddressHex string) (*DepositContracts, error) {
 
 	optimismPortalAddress, err := SafeParseAddress(optimismPortalAddressHex)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse OptimismPortal address: %w", err)
+	}
+	if _, ok := l1Client.CodeAt(ctx, optimismPortalAddress, nil); ok != nil {
+		return nil, fmt.Errorf("no code found at OptimismPortal address: %w", err)
 	}
 	optimismPortalABI, err := bindings.L1StandardBridgeMetaData.GetAbi()
 	if err != nil {
@@ -43,6 +47,9 @@ func NewDepositContracts(l1Client, l2Client *ethclient.Client, optimismPortalAdd
 	if err != nil {
 		return nil, fmt.Errorf("could not parse L1StandardBridge address: %w", err)
 	}
+	if _, ok := l1Client.CodeAt(ctx, l1StandardBridgeAddress, nil); ok != nil {
+		return nil, fmt.Errorf("no code found at l1StandardBridge address: %w", err)
+	}
 	l1StandardBridgeABI, err := bindings.L1StandardBridgeMetaData.GetAbi()
 	if err != nil {
 		return nil, fmt.Errorf("could not get L1StandardBridge abi: %w", err)
@@ -52,6 +59,9 @@ func NewDepositContracts(l1Client, l2Client *ethclient.Client, optimismPortalAdd
 		return nil, fmt.Errorf("could not instantiate L1StandardBridge contract: %w", err)
 	}
 
+	if _, ok := l1Client.CodeAt(ctx, predeploys.L2StandardBridgeAddr, nil); ok != nil {
+		return nil, fmt.Errorf("no code found at l2StandardBridge address: %w", err)
+	}
 	l2StandardBridgeABI, err := bindings.L2StandardBridgeMetaData.GetAbi()
 	if err != nil {
 		return nil, fmt.Errorf("could not get l2StandardBridge abi: %w", err)

@@ -96,11 +96,15 @@ var DepositCommand = &cli.Command{
 		recipientPreBalance, err := l2Client.BalanceAt(ctx, recipient, nil)
 
 		contracts, err := internal.NewDepositContracts(
+			ctx,
 			l1Client,
 			l2Client,
 			c.String("optimism-portal-address"),
 			c.String("l1-standard-bridge-address"),
 		)
+		if err != nil {
+			return fmt.Errorf("could not instantiate deposit contracts: %w", err)
+		}
 
 		opts, err := bind.NewKeyedTransactorWithChainID(privateKey, l1ChainId)
 		if err != nil {
@@ -111,7 +115,7 @@ var DepositCommand = &cli.Command{
 		log.Info("executing l1StandardBridge.bridgeETH transaction")
 
 		tx, err := transactions.PadGasEstimate(opts, 1.5, func(opts *bind.TransactOpts) (*types.Transaction, error) {
-			return contracts.L1StandardBridge.BridgeETHTo(opts, recipient, internal.RECEIVE_DEFAULT_GAS_LIMIT, []byte{})
+			return contracts.L1StandardBridge.DepositETHTo(opts, recipient, internal.RECEIVE_DEFAULT_GAS_LIMIT, []byte{})
 		})
 		if err != nil {
 			return fmt.Errorf("could not construct calldata for DepositETH: %w", err)
