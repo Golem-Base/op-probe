@@ -12,6 +12,8 @@ var WithdrawCommand = &cli.Command{
 	Subcommands: []*cli.Command{
 		withdraw_cmd.ListCommand,
 		withdraw_cmd.InitCommand,
+		withdraw_cmd.ProveCommand,
+		withdraw_cmd.FinalizeCommand,
 	},
 	Action: func(cCtx *cli.Context) error {
 		fmt.Println("Withdraw command requires a subcommand: list, init, prove, or finalize")

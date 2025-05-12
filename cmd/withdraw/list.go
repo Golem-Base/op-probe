@@ -9,6 +9,7 @@ import (
 	"github.com/Golem-Base/op-probe/bindings"
 	"github.com/Golem-Base/op-probe/internal"
 	e2eBindings "github.com/ethereum-optimism/optimism/op-e2e/bindings"
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/receipts"
 	opNodeBindings "github.com/ethereum-optimism/optimism/op-node/bindings"
 	opNodePreviewBindings "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
@@ -25,15 +26,10 @@ const (
 	Initialized WithdrawalStatus = iota
 	Provable
 	Proven
+	ClaimResolved
+	GameResolved
 	Finalized
 )
-
-var WithdrawalStatusName = map[WithdrawalStatus]string{
-	Initialized: "initialized",
-	Provable:    "provable",
-	Proven:      "proven",
-	Finalized:   "finalized",
-}
 
 var ListCommand = &cli.Command{
 	Name:  "list",
@@ -103,9 +99,9 @@ var ListCommand = &cli.Command{
 			return fmt.Errorf("could not instantiate OptimismPortal contract: %w", err)
 		}
 
-		l2ToL1MessagePasserFilterer, err := e2eBindings.NewL2ToL1MessagePasserFilterer(predeploys.L2ToL1MessagePasserAddr, l2Client)
+		l2StandardBridgeFilterer, err := e2eBindings.NewL2StandardBridgeFilterer(predeploys.L2StandardBridgeAddr, l2Client)
 		if err != nil {
-			return fmt.Errorf("could not instantiate L2ToL2MessagePasser filterer")
+			return fmt.Errorf("could not instantiate L2StandardBridge filterer")
 		}
 
 		permissionedDisputeGameAddress, err := disputeGameFactory.GameImpls(&bind.CallOpts{}, 1)
@@ -115,17 +111,16 @@ var ListCommand = &cli.Command{
 		if permissionedDisputeGameAddress == internal.ZeroAddress {
 			return fmt.Errorf("PermissionedDisputeGame not set on DisputeGameFactory contract")
 		}
-		permissionedDisputeGame, err := bindings.NewPermissionedDisputeGame(permissionedDisputeGameAddress, l1Client)
+
+		l2ToL1MessagePasser, err := e2eBindings.NewL2ToL1MessagePasser(predeploys.L2ToL1MessagePasserAddr, l2Client)
 		if err != nil {
-			return fmt.Errorf("could not instantiate PermissionedDisputeGame contract: %w", err)
+			return fmt.Errorf("could not not instantiate L2ToL1MessagePasser contract: %w", err)
 		}
 
-		proposerAddress, err := permissionedDisputeGame.Proposer(&bind.CallOpts{})
+		proofMaturityDelaySeconds, err := optimismPortal.ProofMaturityDelaySeconds(&bind.CallOpts{})
 		if err != nil {
-			return fmt.Errorf("was not able to fetch proposer: %w", err)
+			return fmt.Errorf("could not call OptimismPortal.ProofMaturityDelaySeconds: %w", err)
 		}
-
-		log.Info("permissionedDisputeGameAddress", "address", permissionedDisputeGameAddress)
 
 		game, err := withdrawals.FindLatestGame(ctx, &disputeGameFactory.DisputeGameFactoryCaller, &optimismPortal.OptimismPortal2Caller)
 		if err != nil {
@@ -136,51 +131,123 @@ var ListCommand = &cli.Command{
 
 		log.Info("Found latest game", "game", game.Index, "l2Block", gameL2BlockNumber, "timestamp", time.Unix(int64(game.Timestamp), 0))
 
-		// TODO This is possibly naïve behaviour and might need better filtering to identify withdrawals specifically
-		iterator, err := l2ToL1MessagePasserFilterer.FilterMessagePassed(&bind.FilterOpts{Context: ctx, Start: 0, End: nil}, nil, []common.Address{account}, []common.Address{account})
-
+		iterator, err := l2StandardBridgeFilterer.FilterWithdrawalInitiated(
+			&bind.FilterOpts{Context: ctx, Start: 0, End: nil},
+			[]common.Address{internal.ZeroAddress},
+			[]common.Address{predeploys.LegacyERC20ETHAddr},
+			[]common.Address{account},
+		)
 		for iterator.Next() {
+
 			status := Initialized
 
 			event := iterator.Event
 
-			block, err := l2Client.BlockByNumber(ctx, big.NewInt(int64(event.Raw.BlockNumber)))
+			receipt, err := l2Client.TransactionReceipt(ctx, event.Raw.TxHash)
 			if err != nil {
-				return fmt.Errorf("failed to get block %d: %w", event.Raw.BlockNumber, err)
+				return fmt.Errorf("could not get receipt for withdrawal event in transaction: %s: %w", event.Raw.TxHash.Hex(), err)
 			}
 
-			valueInEth := new(big.Float).Quo(
-				new(big.Float).SetInt(event.Value),
-				new(big.Float).SetInt(big.NewInt(1e18)),
-			)
+			messagePassedEvent, err := receipts.FindLog(receipt.Logs, l2ToL1MessagePasser.ParseMessagePassed)
+			if err != nil {
+				return fmt.Errorf("could not parse L2ToL1MessagePasser.MessagePassed event from the receipt logs: %w", err)
+			}
 
-			if gameL2BlockNumber.Uint64() > block.Number().Uint64() {
+			if gameL2BlockNumber.Uint64() >= receipt.BlockNumber.Uint64() {
 				status = Provable
 			}
+
+			timestamp := uint64(0)
+			var created_at_time time.Time
+			disputeGameStatus := uint8(0)
+			isClaimResolved := false
+			challengerDuration := time.Duration(0)
+			maxClockDuration := time.Duration(0)
+
 			if status == Provable {
-				proven, err := optimismPortal.ProvenWithdrawals(&bind.CallOpts{}, event.WithdrawalHash, proposerAddress)
+				proven, err := optimismPortal.ProvenWithdrawals(
+					&bind.CallOpts{},
+					messagePassedEvent.WithdrawalHash,
+					account, // TODO This is a simplified lookup and a more robust approach would be to filter by event for WithdrawalProven events
+				)
 				if err != nil {
 					return fmt.Errorf("could not fetch proven withdrawal: %w", err)
 				}
 
 				if proven.DisputeGameProxy != common.BytesToAddress([]byte{0}) {
 					status = Proven
+					timestamp = proven.Timestamp
+
+					permissionedDisputeGame, err := bindings.NewPermissionedDisputeGame(proven.DisputeGameProxy, l1Client)
+					if err != nil {
+						return fmt.Errorf("could not construct permissioned dispute game")
+					}
+
+					created_at, err := permissionedDisputeGame.CreatedAt(&bind.CallOpts{})
+					if err != nil {
+						return fmt.Errorf("could not fetch DisputeGame.CreatedAt: %w", err)
+					}
+					created_at_time = time.Unix(int64(created_at), 0)
+
+					disputeGameStatus, err = permissionedDisputeGame.Status(&bind.CallOpts{})
+					if err != nil {
+						return fmt.Errorf("could not fetch DisputeGame.Status: %w", err)
+					}
+
+					_maxClockDuration, err := permissionedDisputeGame.MaxClockDuration(&bind.CallOpts{})
+					if err != nil {
+						return fmt.Errorf("PermissionedDisputeGame.GetChallengerDuration failed: %w", err)
+					}
+					maxClockDuration = time.Duration(_maxClockDuration * uint64(time.Second))
+
+					_challengerDuration, err := permissionedDisputeGame.GetChallengerDuration(&bind.CallOpts{}, common.Big0)
+					if err != nil {
+						return fmt.Errorf("PermissionedDisputeGame.GetChallengerDuration failed: %w", err)
+					}
+					challengerDuration = time.Duration(_challengerDuration * uint64(time.Second))
+
+					isClaimResolved, err = permissionedDisputeGame.ResolvedSubgames(&bind.CallOpts{}, common.Big0)
+					if err != nil {
+						return fmt.Errorf("PermissionedDisputeGame.ResolvedSubgame failed: %w", err)
+					}
+
+					if isClaimResolved {
+						status = ClaimResolved
+					}
+
 				}
 			}
 
-			timestamp := time.Unix(int64(block.Time()), 0)
+			nonce := DecodeVersionedNonce(messagePassedEvent.Nonce)
 
-			nonce := DecodeVersionedNonce(event.Nonce)
+			withdrawalHash := common.Bytes2Hex(messagePassedEvent.WithdrawalHash[:])
+			provenTime := time.Unix(int64(timestamp), 0)
+			finalizableTime := time.Unix(int64(timestamp)+proofMaturityDelaySeconds.Int64(), 0)
 
-			withdrawalHash := common.Bytes2Hex(event.WithdrawalHash[:])
+			secondsUntilWithdrawalFinalization := time.Duration(0)
+			if status == Proven {
+				secondsUntilWithdrawalFinalization = finalizableTime.Sub(time.Now())
+			}
 
 			log.Info(fmt.Sprintf("Withdrawal: %s", nonce),
-				"initialized", timestamp,
-				"block", event.Raw.BlockNumber,
+				"from", event.From,
+				"to", event.To,
+				"l1Token", event.L1Token,
+				"l2Token", event.L2Token,
+				"amount", internal.FormatWei(event.Amount),
+				"block", receipt.BlockNumber.Uint64(),
 				"withdrawalHash", withdrawalHash,
-				"txHash", event.Raw.TxHash.Hex(),
-				"amount", valueInEth,
-				"status", WithdrawalStatusName[status],
+				"transactionHash", event.Raw.TxHash.Hex(),
+				"status", status,
+				"timestamp_proven", provenTime,
+				"timestamp_created_at", created_at_time,
+				"timestamp_finalizable", finalizableTime,
+				"finalizable_in", secondsUntilWithdrawalFinalization,
+				"proof_maturity_delay", time.Duration(proofMaturityDelaySeconds.Int64()*int64(time.Second)),
+				"isClaimResolved", isClaimResolved,
+				"challengerDuration", challengerDuration,
+				"maxClockDuration", maxClockDuration,
+				"disputeGameStatus", disputeGameStatus,
 			)
 		}
 		if err := iterator.Error(); err != nil {

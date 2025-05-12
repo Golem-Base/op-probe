@@ -3,21 +3,22 @@ package withdraw_cmd
 import (
 	"context"
 	"fmt"
-	"math/big"
 
 	"github.com/Golem-Base/op-probe/internal"
 	e2eBindings "github.com/ethereum-optimism/optimism/op-e2e/bindings"
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/receipts"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/transactions"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
 	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/urfave/cli/v2"
 )
 
-const RECEIVE_DEFAULT_GAS_LIMIT uint64 = 100_000
+const RECEIVE_DEFAULT_GAS_LIMIT uint32 = 100_000
 
 var InitCommand = &cli.Command{
 	Name:  "init",
@@ -31,6 +32,11 @@ var InitCommand = &cli.Command{
 		&cli.StringFlag{
 			Name:     "l2-rpc-url",
 			Usage:    "Url for L2 execution client",
+			Required: true,
+		},
+		&cli.StringFlag{
+			Name:     "recipient",
+			Usage:    "Address to receive amount",
 			Required: true,
 		},
 		&cli.StringFlag{
@@ -58,13 +64,23 @@ var InitCommand = &cli.Command{
 			return fmt.Errorf("failed to parse private-key: %w", err)
 		}
 
-		account := crypto.PubkeyToAddress(privateKey.PublicKey)
+		sender := crypto.PubkeyToAddress(privateKey.PublicKey)
 
-		log.Info("initiating withdrawal", "account", account, "amount", amount)
+		recipient, err := internal.SafeParseAddress(c.String("recipient"))
+		if err != nil {
+			return fmt.Errorf("could not parse recipient address: %w", err)
+		}
+
+		log.Info("initiating withdrawal", "sender", sender, "receipient", recipient, "amount", amount)
 
 		l2ChainId, err := l2Client.ChainID(ctx)
 		if err != nil {
 			return fmt.Errorf("could not fetch l2 network id: %w", err)
+		}
+
+		l2StandardBridge, err := e2eBindings.NewL2StandardBridge(predeploys.L2StandardBridgeAddr, l2Client)
+		if err != nil {
+			return fmt.Errorf("could not not instantiate L2ToL1MessagePasser contract: %w", err)
 		}
 
 		l2ToL1MessagePasser, err := e2eBindings.NewL2ToL1MessagePasser(predeploys.L2ToL1MessagePasserAddr, l2Client)
@@ -79,7 +95,7 @@ var InitCommand = &cli.Command{
 		opts.Value = amount
 
 		tx, err := transactions.PadGasEstimate(opts, 1.5, func(opts *bind.TransactOpts) (*types.Transaction, error) {
-			return l2ToL1MessagePasser.InitiateWithdrawal(opts, opts.From, big.NewInt(int64(RECEIVE_DEFAULT_GAS_LIMIT)), []byte{})
+			return l2StandardBridge.BridgeETHTo(opts, recipient, RECEIVE_DEFAULT_GAS_LIMIT, []byte{})
 		})
 		if err != nil {
 			return fmt.Errorf("could not construct transaction to initiate withdrawal: %w", err)
@@ -97,7 +113,12 @@ var InitCommand = &cli.Command{
 			}
 		}
 
-		log.Info("successfully initialized withdrawal", "receipt", receipt)
+		messagePassedEvent, err := receipts.FindLog(receipt.Logs, l2ToL1MessagePasser.ParseMessagePassed)
+		if err != nil {
+			return fmt.Errorf("could not parse L2ToL1MessagePasser.MessagePassed event from the receipt logs: %w", err)
+		}
+
+		log.Info("successfully initialized withdrawal", "withdrawalHash", common.Bytes2Hex(messagePassedEvent.WithdrawalHash[:]))
 
 		return nil
 	},
